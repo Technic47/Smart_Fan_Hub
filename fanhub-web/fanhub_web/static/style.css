@@ -105,3 +105,24 @@ input[type="range"] { accent-color: var(--accent); vertical-align: middle; }
 .console-cmd { color: var(--accent); }
 
 .spin-params input { width: 70px; }
+
+/* главная таблица: снятые с учёта каналы */
+.disabled-row td { opacity: 0.38; }
+td.chk { text-align: center; }
+.bind-cell { cursor: pointer; }
+.bind-cell:hover .bind-text { color: var(--accent); }
+.cell-error { animation: cellflash 0.5s 3; }
+@keyframes cellflash { 50% { background: #5c2025; } }
+.curve-cell { cursor: pointer; white-space: nowrap; }
+.curve-cell:hover .spark { filter: drop-shadow(0 0 3px var(--accent)); }
+.group-label { margin-left: 6px; }
+
+/* модальное окно кривой */
+.modal {
+  position: fixed; inset: 0; background: rgba(6, 9, 12, 0.72);
+  display: flex; align-items: center; justify-content: center; z-index: 50;
+}
+.modal-box {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+  padding: 14px 18px 16px; width: min(820px, 94vw); max-height: 92vh; overflow-y: auto;
+}

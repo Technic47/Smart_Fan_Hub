@@ -1,21 +1,22 @@
-/* Вкладка «Кривые»: SVG-редактор 5 точек с перетаскиванием,
-   сохранение в плату с верификацией чтением. */
+/* Модальное окно редактирования кривой канала.
+   Кривая общая для группы (каналы с тем же датчиком); смена привязки
+   в окне заменяет кривую на кривую новой группы. */
 (function () {
-  const { $, api, onStatus } = window.FanHub;
+  const { $, api, getStatus, getCurves, refreshCurves } = window.FanHub;
 
   const NS = "http://www.w3.org/2000/svg";
   const L = 46, R = 14, T = 14, B = 30, W = 640, H = 360;
   const PW = W - L - R, PH = H - T - B;
-  const T_MAX = 110;          // отображаемый диапазон температур
+  const T_MAX = 110;
   const N_PTS = 5;
 
-  let points = [];            // [[t, p] x5], отсортированы по t
-  let channels = [];          // [{name, label}]
+  let points = [];
+  let channel = "";
   let dragIdx = -1;
+  let opening = false;
 
-  const svg = $("curve-svg");
-  const sel = $("curve-channel");
-  const statusEl = $("curve-status");
+  const svg = $("cm-svg");
+  const statusEl = $("cm-status");
 
   const x = (t) => L + (t / T_MAX) * PW;
   const y = (p) => T + PH - (p / 100) * PH;
@@ -29,16 +30,14 @@
     return e;
   }
 
-  function sorted() {
-    points = points.slice().sort((a, b) => a[0] - b[0]);
-  }
+  function sorted() { points = points.slice().sort((a, b) => a[0] - b[0]); }
 
   function renderPointsList() {
-    $("curve-points").innerHTML = points.map((pt, i) =>
+    $("cm-points").innerHTML = points.map((pt, i) =>
       `<span class="pt">точка ${i + 1}: <input type="number" min="0" max="125" value="${pt[0]}" data-i="${i}" data-k="0" style="width:58px">°C` +
       ` <input type="number" min="0" max="100" value="${pt[1]}" data-i="${i}" data-k="1" style="width:52px">%</span>`
     ).join(" ");
-    document.querySelectorAll("#curve-points input").forEach((inp) => {
+    document.querySelectorAll("#cm-points input").forEach((inp) => {
       inp.addEventListener("change", () => {
         const i = +inp.dataset.i, k = +inp.dataset.k;
         let v = parseFloat(inp.value);
@@ -53,10 +52,9 @@
   }
 
   function liveMarker() {
-    const st = window.FanHub.getStatus();
+    const st = getStatus();
     if (!st || !st.hub.link.connected) return null;
-    const name = sel.value;
-    const ch = st.hub.channels.find((c) => c.name === name);
+    const ch = st.hub.channels.find((c) => c.name === channel);
     if (!ch) return null;
     let temp = null;
     if (ch.source_type === "SERIAL") {
@@ -67,7 +65,6 @@
       if (rec && rec.value !== null) temp = rec.value;
     }
     if (temp === null) return null;
-    // интерполяция кривой в точке temp
     let pct = points.length ? points[points.length - 1][1] : 0;
     for (let i = 0; i + 1 < points.length; i++) {
       const [t0, p0] = points[i], [t1, p1] = points[i + 1];
@@ -82,22 +79,19 @@
 
   function draw() {
     svg.innerHTML = "";
-    // сетка
     for (let t = 0; t <= T_MAX; t += 10) {
       el("line", { x1: x(t), y1: T, x2: x(t), y2: T + PH, stroke: t % 50 ? "#20262e" : "#2c3540", "stroke-width": 1 });
-      const tx = el("text", { x: x(t), y: H - 10, "text-anchor": "middle", class: "axis" }, svg);
+      const tx = el("text", { x: x(t), y: H - 14, "text-anchor": "middle", class: "axis" });
       tx.textContent = t;
     }
     for (let p = 0; p <= 100; p += 20) {
       el("line", { x1: L, y1: y(p), x2: L + PW, y2: y(p), stroke: "#20262e", "stroke-width": 1 });
-      const ty = el("text", { x: L - 8, y: y(p) + 4, "text-anchor": "end", class: "axis" }, svg);
+      const ty = el("text", { x: L - 8, y: y(p) + 4, "text-anchor": "end", class: "axis" });
       ty.textContent = p + "%";
     }
-    const tx = el("text", { x: L + PW / 2, y: H - 10 + 0, "text-anchor": "middle", class: "axis" }, svg);
-    // подписи осей
-    const xl = el("text", { x: L + PW / 2, y: H - 0.5, "text-anchor": "middle", class: "axis" }, svg);
+    const xl = el("text", { x: L + PW / 2, y: H - 2, "text-anchor": "middle", class: "axis" });
     xl.textContent = "температура, °C";
-    const yl = el("text", { x: 12, y: T + PH / 2, "text-anchor": "middle", class: "axis", transform: `rotate(-90 12 ${T + PH / 2})` }, svg);
+    const yl = el("text", { x: 12, y: T + PH / 2, "text-anchor": "middle", class: "axis", transform: `rotate(-90 12 ${T + PH / 2})` });
     yl.textContent = "мощность";
 
     if (points.length === N_PTS) {
@@ -114,11 +108,7 @@
           fill: dragIdx === i ? "#e2b93d" : "#4aa3ff", stroke: "#0d1117", "stroke-width": 2,
           style: "cursor:grab",
         });
-        c.addEventListener("pointerdown", (ev) => {
-          dragIdx = i;
-          c.setPointerCapture(ev.pointerId);
-          ev.preventDefault();
-        });
+        c.addEventListener("pointerdown", (ev) => { dragIdx = i; c.setPointerCapture(ev.pointerId); ev.preventDefault(); });
         c.addEventListener("pointermove", (ev) => {
           if (dragIdx !== i) return;
           const rect = svg.getBoundingClientRect();
@@ -128,30 +118,37 @@
           points[i][1] = Math.min(100, Math.max(0, Math.round(invY(sy))));
           draw();
         });
-        c.addEventListener("pointerup", () => {
-          dragIdx = -1;
-          sorted();
-          renderPointsList();
-          draw();
-        });
-        const label = el("text", { x: x(pt[0]), y: y(pt[1]) - 14, "text-anchor": "middle", class: "axis" }, svg);
+        c.addEventListener("pointerup", () => { dragIdx = -1; sorted(); renderPointsList(); draw(); });
+        const label = el("text", { x: x(pt[0]), y: y(pt[1]) - 14, "text-anchor": "middle", class: "axis" });
         label.textContent = `${pt[0]}°/${pt[1]}%`;
       });
     }
     renderPointsList();
   }
 
+  function fillBindSelect() {
+    const st = getStatus();
+    if (!st) return;
+    const ch = st.hub.channels.find((c) => c.name === channel);
+    if (!ch) return;
+    const opts = [];
+    for (const t of (st.hub.thermistors || [])) opts.push({ v: "THERM:" + t.name, label: "терм. " + t.name });
+    for (const [k, label] of Object.entries(st.serial_display_names || {})) opts.push({ v: "SERIAL:" + k, label: "ПК: " + label });
+    $("cm-bind").innerHTML = opts.map((o) => `<option value="${o.v}">${o.label}</option>`).join("");
+    $("cm-bind").value = ch.source_type + ":" + ch.source_name;
+  }
+
   async function loadFromBoard() {
-    statusEl.textContent = "читаю кривые…";
+    statusEl.textContent = "читаю кривую…";
     try {
       const d = await api("/api/curves");
-      const pts = d.curves[sel.value];
+      const pts = d.curves[channel];
       if (pts) {
         points = pts.map((p) => [Math.round(p[0]), p[1]]);
         sorted();
         statusEl.textContent = "загружено из платы";
       } else {
-        statusEl.textContent = "у канала нет кривой?";
+        statusEl.textContent = "кривая не найдена";
       }
       draw();
     } catch (e) {
@@ -163,36 +160,64 @@
     statusEl.textContent = "сохраняю…";
     try {
       sorted();
-      const d = await api("/api/curves", { channel: sel.value, points });
-      if (d.ok) {
-        statusEl.textContent = "сохранено и проверено чтением ✔";
-      } else {
-        statusEl.textContent = "несовпадение после записи! На плате: " + JSON.stringify(d.board);
-      }
+      const d = await api("/api/curves", { channel, points });
+      statusEl.textContent = d.ok
+        ? "сохранено и проверено чтением ✔"
+        : "несовпадение после записи! На плате: " + JSON.stringify(d.board);
+      refreshCurves();
     } catch (e) {
       statusEl.textContent = "ошибка: " + e.message;
     }
     draw();
   }
 
-  function fillChannels() {
-    const st = window.FanHub.getStatus();
-    if (!st) return;
-    const prev = sel.value;
-    channels = st.hub.channels;
-    sel.innerHTML = channels.map((c) => `<option value="${c.name}">${c.label}</option>`).join("");
-    if (channels.some((c) => c.name === prev)) sel.value = prev;
+  function open(name) {
+    channel = name;
+    opening = true;
+    const st = getStatus();
+    const label = st && st.hub.channels.find((c) => c.name === name);
+    $("cm-title").textContent = "Кривая: " + (label ? label.label : name);
+    fillBindSelect();
+    // мгновенно показать кэш, потом свежее с платы
+    const cached = getCurves()[name];
+    if (cached) {
+      points = cached.map((p) => [Math.round(p[0]), p[1]]);
+      sorted();
+      draw();
+    }
+    $("curve-modal").style.display = "";
+    loadFromBoard();
   }
 
-  sel.addEventListener("change", loadFromBoard);
-  $("curve-reload").addEventListener("click", loadFromBoard);
-  $("curve-save").addEventListener("click", save);
-  onStatus(() => { const n = sel.options.length; fillChannels(); if (!n && sel.options.length) loadFromBoard(); });
-  document.addEventListener("tabchange", (e) => {
-    if (e.detail === "curves") {
-      fillChannels();
-      if (!points.length) loadFromBoard(); else draw();
+  function close() { $("curve-modal").style.display = "none"; }
+
+  $("cm-close").addEventListener("click", close);
+  $("cm-save").addEventListener("click", save);
+  $("cm-reload").addEventListener("click", loadFromBoard);
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") close(); });
+
+  $("cm-bind").addEventListener("change", async () => {
+    const [type, source] = $("cm-bind").value.split(":");
+    statusEl.textContent = "перепривязка…";
+    try {
+      const r = await api("/api/bind", { channel, type, source });
+      if (!r.ok) {
+        statusEl.textContent = "отказ платы: " + r.lines.join("; ");
+        fillBindSelect();
+        return;
+      }
+      statusEl.textContent = "привязано, кривая заменена на кривую группы";
+      refreshCurves();
+      await loadFromBoard();
+    } catch (e) {
+      statusEl.textContent = "ошибка: " + e.message;
+      fillBindSelect();
     }
   });
-  draw();
+
+  window.CurveEditor = {
+    open,
+    reload: loadFromBoard,
+    isOpenFor: (name) => $("curve-modal").style.display !== "none" && channel === name,
+  };
 })();

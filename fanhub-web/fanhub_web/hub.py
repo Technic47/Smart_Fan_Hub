@@ -152,6 +152,13 @@ class _Request:
     max_ms: int = 8000
 
 
+_WRITE_PREFIXES = ("CURVE=", "BIND=", "MODE=", "SET=", "HOLD=", "SPIN=", "DCFREQ=", "TEMP=")
+
+
+def _is_write(cmd: str) -> bool:
+    return cmd.lstrip().upper().startswith(_WRITE_PREFIXES)
+
+
 class HubLink(threading.Thread):
     """Фоновый поток связи с платой."""
 
@@ -376,7 +383,8 @@ class HubLink(threading.Thread):
                     port.write((req.cmd.strip() + "\n").encode())
                 except serial.SerialException:
                     return
-                req.lines = self._collect_response(port, req.max_ms)
+                quiet = 0.25 if _is_write(req.cmd) else 0.8
+                req.lines = self._collect_response(port, req.max_ms, quiet)
                 req.done = True
                 rx_buf = b""
                 next_feed = time.monotonic() + 0.3
@@ -418,8 +426,8 @@ class HubLink(threading.Thread):
             else:
                 time.sleep(0.02)
 
-    def _collect_response(self, port: serial.Serial, max_ms: int) -> list[str]:
-        """Собрать ответ на запрошенную команду: до маркера =END или тишины 800 мс."""
+    def _collect_response(self, port: serial.Serial, max_ms: int, quiet_s: float = 0.8) -> list[str]:
+        """Собрать ответ на запрошенную команду: до маркера =END или тишины quiet_s."""
         lines: list[str] = []
         buf = b""
         deadline = time.monotonic() + max_ms / 1000.0
@@ -442,7 +450,7 @@ class HubLink(threading.Thread):
                     lines.append(line)
                     if line.endswith("=END"):
                         return lines
-                    quiet_deadline = time.monotonic() + 0.8
+                    quiet_deadline = time.monotonic() + quiet_s
             else:
                 if quiet_deadline is not None and time.monotonic() > quiet_deadline:
                     return lines

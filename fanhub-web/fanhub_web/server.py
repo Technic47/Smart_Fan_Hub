@@ -98,7 +98,22 @@ def create_app(config) -> FastAPI:
             "host_temps": host_temps(),
             "log": log.tail(150),
             "serial_display_names": display_serial,
+            "disabled_channels": config.data.get("disabled_channels", []),
         }
+
+    @app.post("/api/channel")
+    async def channel_set(body: dict):
+        ch = str(body.get("channel", "")).strip()
+        if not _TOKEN_RE.match(ch):
+            return bad("некорректное имя канала")
+        disabled = config.data.setdefault("disabled_channels", [])
+        if body.get("enabled"):
+            if ch in disabled:
+                disabled.remove(ch)
+        elif ch not in disabled:
+            disabled.append(ch)
+        config.save()
+        return {"ok": True, "disabled": disabled}
 
     # ---------- диалоги ----------
 
@@ -124,10 +139,21 @@ def create_app(config) -> FastAPI:
             if not (0 <= t <= 125 and 0 <= p <= 100):
                 return bad("точка вне диапазона (t: 0..125, %: 0..100)")
             norm.append((int(round(t)), p))
-        for i, (t, p) in enumerate(norm):
-            for ln in await req(f"CURVE={ch},{i},{t},{p}"):
-                if "ERR" in ln:
-                    return bad("плата отклонила точку: " + ln)
+        # группа кривой = текущая привязка канала: пишем одну кривую
+        # во все каналы группы (как «группы кривых» в трее)
+        snap_chans = hub.snapshot()["channels"]
+        members = [ch]
+        me = next((c for c in snap_chans if c["name"] == ch), None)
+        if me is not None:
+            members += [c["name"] for c in snap_chans
+                        if c["name"] != ch
+                        and c["source_type"] == me["source_type"]
+                        and c["source_name"] == me["source_name"]]
+        for member in members:
+            for i, (t, p) in enumerate(norm):
+                for ln in await req(f"CURVE={member},{i},{t},{p}"):
+                    if "ERR" in ln:
+                        return bad(f"плата отклонила точку ({member}): " + ln)
         saved = await req("CURVE=SAVE")
         board = _curves_from(await req("CURVES?")).get(ch)
         expect = [[float(t), p] for t, p in norm]
@@ -157,6 +183,19 @@ def create_app(config) -> FastAPI:
         src = str(body.get("source", "")).strip()
         if not (_TOKEN_RE.match(ch) and typ in ("THERM", "SERIAL") and _TOKEN_RE.match(src)):
             return bad("некорректные аргументы")
+        # кривая новой группы: донор — любой канал, уже привязанный к этому
+        # источнику; его кривая копируется на перепривязываемый канал
+        donor = next((c["name"] for c in hub.snapshot()["channels"]
+                      if c["name"] != ch
+                      and c["source_type"] == typ
+                      and c["source_name"] == src), None)
+        if donor:
+            pts = _curves_from(await req("CURVES?")).get(donor)
+            if pts:
+                for i, (t, p) in enumerate(pts):
+                    for ln in await req(f"CURVE={ch},{i},{int(round(t))},{int(p)}"):
+                        if "ERR" in ln:
+                            return bad("кривая новой группы не записалась: " + ln)
         lines = await req(f"BIND={ch},{typ},{src}")
         rejected = [ln for ln in lines if "ERR" in ln or "LOCKED" in ln]
         if rejected:

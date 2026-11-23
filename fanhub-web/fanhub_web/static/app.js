@@ -1,16 +1,28 @@
-/* MKS Fan Hub — общий каркас: вкладки, WebSocket, мониторинг, журнал.
-   Модули вкладок (curves/binds/control/console) подключаются ниже и читают
-   window.FanHub. */
+/* MKS Fan Hub — главная страница: вкладки, WebSocket, таблица каналов
+   с чекбоксом «Подключён», кликабельной привязкой и иконками кривых. */
 (function () {
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
   const listeners = [];
-  let lastStatus = null;   // {hub, host_temps}
-  let lastLog = [];
+  let lastStatus = null;
+  let disabledChannels = [];
+  let curvesCache = {};        // имя канала -> [[t,p] x5]
+  let curvesStamp = 0;         // для отложенного обновления спарклайнов
 
   function onStatus(fn) { listeners.push(fn); }
   function emit() { for (const fn of listeners) fn(lastStatus); }
+
+  async function api(path, body) {
+    const r = await fetch(path, body === undefined ? undefined : {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error || ("HTTP " + r.status));
+    return d;
+  }
 
   // ---------- вкладки ----------
   document.querySelectorAll("#tabs button").forEach((b) => {
@@ -21,7 +33,44 @@
     });
   });
 
-  // ---------- рендер мониторинга ----------
+  // ---------- кривые (кэш для спарклайнов) ----------
+  async function refreshCurves() {
+    try {
+      const d = await api("/api/curves");
+      curvesCache = d.curves;
+      curvesStamp = Date.now();
+      renderFans(lastStatus ? lastStatus.hub.channels : []);
+    } catch (e) { /* плата офлайн */ }
+  }
+  setInterval(() => { if (Date.now() - curvesStamp > 30000) refreshCurves(); }, 30000);
+
+  function sparkline(name) {
+    const pts = curvesCache[name];
+    if (!pts) return `<svg viewBox="0 0 44 26" width="44" height="26" class="spark"><rect width="44" height="26" fill="none"/></svg>`;
+    let maxT = 60;
+    for (const p of pts) if (p[0] > maxT) maxT = Math.ceil(p[0] / 10) * 10;
+    const xy = pts.map(([t, p]) =>
+      `${(4 + (t / maxT) * 36).toFixed(1)},${(22 - (p / 100) * 20).toFixed(1)}`).join(" ");
+    return `<svg viewBox="0 0 44 26" width="44" height="26" class="spark" title="Редактировать кривую">` +
+           `<polyline points="${xy}" fill="none" stroke="#4aa3ff" stroke-width="1.6"/>` +
+           pts.map(([t, p]) => `<circle cx="${(4 + (t / maxT) * 36).toFixed(1)}" cy="${(22 - (p / 100) * 20).toFixed(1)}" r="1.4" fill="#4aa3ff"/>`).join("") +
+           `</svg>`;
+  }
+
+  // ---------- источники для привязки ----------
+  function sourceOptions(curType, curName) {
+    const opts = [];
+    const therms = lastStatus ? (lastStatus.hub.thermistors || []).map((t) => t.name) : [];
+    for (const t of therms) opts.push({ v: "THERM:" + t, label: "терм. " + t });
+    const serials = lastStatus ? (lastStatus.serial_display_names || {}) : {};
+    for (const [k, label] of Object.entries(serials)) opts.push({ v: "SERIAL:" + k, label: "ПК: " + label });
+    return opts.map((o) => {
+      const sel = o.v === curType + ":" + curName ? "selected" : "";
+      return `<option value="${o.v}" ${sel}>${esc(o.label)}</option>`;
+    }).join("");
+  }
+
+  // ---------- рендер ----------
   function renderHeader(hub) {
     const link = $("link");
     if (hub.link.connected) {
@@ -45,9 +94,7 @@
   function renderHostTemps(temps) {
     $("temp-cards").innerHTML = Object.entries(temps).map(([key, t]) => {
       const cls = t.value === null ? "lost" : (t.age > 5 ? "stale" : "");
-      const val = t.value === null
-        ? "—"
-        : `${t.value.toFixed(1)}<small>°C</small>`;
+      const val = t.value === null ? "—" : `${t.value.toFixed(1)}<small>°C</small>`;
       const stale = t.value !== null && t.age > 5 ? ` <small>(+${Math.round(t.age)}с)</small>` : "";
       return `<div class="card ${cls}"><div class="label">${esc(t.label)}${stale}</div>` +
              `<div class="value">${val}</div></div>`;
@@ -55,39 +102,103 @@
   }
 
   function renderTherms(therms) {
-    const tb = document.querySelector("#therms tbody");
-    tb.innerHTML = therms.map((t) => {
+    document.querySelector("#therms tbody").innerHTML = therms.map((t) => {
       const v = t.value === null ? "—" : t.value.toFixed(1) + " °C";
       return `<tr><td>${esc(t.name)}</td><td>${v}</td>` +
              `<td class="state-${esc(t.state)}">${esc(t.state)}</td></tr>`;
     }).join("");
   }
 
+  function bindLabel(c) {
+    if (c.source_type === "THERM") return "терм. " + c.source_name;
+    const names = lastStatus ? lastStatus.serial_display_names || {} : {};
+    return "ПК: " + (names[c.source_name] || c.source_name);
+  }
+
   function renderFans(channels) {
     const tb = document.querySelector("#fans tbody");
     tb.innerHTML = channels.map((c) => {
-      const src = c.source_type === "THERM"
-        ? "терм. " + esc(c.source_name)
-        : "ПК: " + esc(c.source_name);
+      const off = disabledChannels.includes(c.name);
       const spin = c.spin_state
         ? `<span class="state-${esc(c.spin_state)}">${esc(c.spin_state)}${c.spin_state === "ERR" ? " (" + c.spin_tries + ")" : ""}</span>`
         : "";
-      const flags = [
-        c.locked ? "закреплён" : "",
-        c.active ? "" : "не активен",
-      ].filter(Boolean).join(", ");
-      return `<tr><td>${esc(c.label)}${flags ? ` <span class="hint">(${flags})</span>` : ""}</td>` +
-             `<td class="out">${c.pct}%</td><td>${src}</td>` +
-             `<td class="state-${esc(c.tach_state)}">${esc(c.tach_state)}</td>` +
-             `<td class="rpm">${c.rpm}</td><td>${spin}</td></tr>`;
+      const flags = [c.locked ? "закреплён" : "", c.active ? "" : "не активен"].filter(Boolean).join(", ");
+      return `<tr data-ch="${c.name}" class="${off ? "disabled-row" : ""}">
+        <td>${esc(c.label)}${flags ? ` <span class="hint">(${flags})</span>` : ""}</td>
+        <td class="out">${c.pct}%</td>
+        <td class="state-${esc(c.tach_state)}">${esc(c.tach_state)}</td>
+        <td class="rpm">${c.rpm}</td>
+        <td>${spin}</td>
+        <td class="chk"><input type="checkbox" class="conn" ${off ? "" : "checked"} title="Подключён ли вентилятор"></td>
+        <td class="bind-cell" title="Нажми, чтобы перепривязать"><span class="bind-text">${esc(bindLabel(c))}</span></td>
+        <td class="curve-cell" title="Редактировать кривую">${sparkline(c.name)} <span class="hint group-label">${esc(c.source_name)}</span></td>
+      </tr>`;
     }).join("");
+
+    // чекбокс «Подключён»
+    tb.querySelectorAll("input.conn").forEach((cb) => {
+      cb.addEventListener("change", async () => {
+        const tr = cb.closest("tr");
+        try {
+          const d = await api("/api/channel", { channel: tr.dataset.ch, enabled: cb.checked });
+          disabledChannels = d.disabled;
+          tr.classList.toggle("disabled-row", !cb.checked);
+        } catch (e) {
+          cb.checked = !cb.checked;
+          alert("Не сохранилось: " + e.message);
+        }
+      });
+    });
+
+    // клик по привязке -> выбор
+    tb.querySelectorAll(".bind-cell").forEach((cell) => {
+      cell.addEventListener("click", () => {
+        if (cell.querySelector("select")) return;
+        const tr = cell.closest("tr");
+        const name = tr.dataset.ch;
+        const c = channels.find((x) => x.name === name);
+        const old = bindLabel(c);
+        cell.innerHTML = `<select>${sourceOptions(c.source_type, c.source_name)}</select>`;
+        const selEl = cell.querySelector("select");
+        selEl.focus();
+        const cancel = () => { cell.innerHTML = `<span class="bind-text">${esc(old)}</span>`; };
+        selEl.addEventListener("blur", cancel);
+        selEl.addEventListener("change", async () => {
+          selEl.removeEventListener("blur", cancel);
+          const [type, source] = selEl.value.split(":");
+          cell.innerHTML = `<span class="bind-text">${esc(old)}</span>`;
+          try {
+            const r = await api("/api/bind", { channel: name, type, source });
+            if (!r.ok) {
+              cell.classList.add("cell-error");
+              setTimeout(() => cell.classList.remove("cell-error"), 1500);
+              alert("Плата отказала: " + r.lines.join("; ") + "\n(для закреплённых каналов переключи режим в TMP-MAN)");
+              return;
+            }
+            await refreshCurves();          // кривая заменена на кривую новой группы
+            if (window.CurveEditor && window.CurveEditor.isOpenFor(name)) {
+              window.CurveEditor.reload();
+            }
+          } catch (e) {
+            alert("Ошибка: " + e.message);
+          }
+        });
+      });
+    });
+
+    // клик по кривой -> редактор
+    tb.querySelectorAll(".curve-cell").forEach((cell) => {
+      cell.addEventListener("click", () => {
+        if (window.CurveEditor) window.CurveEditor.open(cell.closest("tr").dataset.ch);
+      });
+    });
   }
 
   async function loadLog() {
     try {
       const r = await fetch("/api/status");
       const d = await r.json();
-      lastLog = d.log;
+      disabledChannels = d.disabled_channels || [];
       $("log").innerHTML = d.log.map((e) =>
         `<div><span class="t">${e.t}</span> <span class="${e.kind}">${esc(e.text)}</span></div>`
       ).join("");
@@ -95,7 +206,6 @@
     } catch (e) { /* сервер ещё не поднялся */ }
   }
 
-  // ---------- WebSocket ----------
   function connectWs() {
     const ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws");
     ws.onmessage = (ev) => {
@@ -110,20 +220,15 @@
     ws.onclose = () => setTimeout(connectWs, 2000);
   }
 
-  async function api(path, body) {
-    const r = await fetch(path, body === undefined ? undefined : {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    const d = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(d.error || ("HTTP " + r.status));
-    return d;
-  }
-
-  window.FanHub = { $, esc, api, onStatus, getStatus: () => lastStatus, getLog: () => lastLog };
+  window.FanHub = {
+    $, esc, api, onStatus,
+    getStatus: () => lastStatus,
+    getCurves: () => curvesCache,
+    refreshCurves,
+  };
 
   connectWs();
   loadLog();
   setInterval(loadLog, 5000);
+  refreshCurves();
 })();
