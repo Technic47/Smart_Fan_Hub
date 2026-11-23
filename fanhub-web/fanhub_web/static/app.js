@@ -1,11 +1,27 @@
-/* MKS Fan Hub — мониторинг. Live через WebSocket, журнал через REST. */
+/* MKS Fan Hub — общий каркас: вкладки, WebSocket, мониторинг, журнал.
+   Модули вкладок (curves/binds/control/console) подключаются ниже и читают
+   window.FanHub. */
 (function () {
   const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
-  function esc(s) {
-    return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-  }
+  const listeners = [];
+  let lastStatus = null;   // {hub, host_temps}
+  let lastLog = [];
 
+  function onStatus(fn) { listeners.push(fn); }
+  function emit() { for (const fn of listeners) fn(lastStatus); }
+
+  // ---------- вкладки ----------
+  document.querySelectorAll("#tabs button").forEach((b) => {
+    b.addEventListener("click", () => {
+      document.querySelectorAll("#tabs button").forEach((x) => x.classList.toggle("active", x === b));
+      document.querySelectorAll(".tab-pane").forEach((p) => p.classList.toggle("active", p.id === "tab-" + b.dataset.tab));
+      document.dispatchEvent(new CustomEvent("tabchange", { detail: b.dataset.tab }));
+    });
+  });
+
+  // ---------- рендер мониторинга ----------
   function renderHeader(hub) {
     const link = $("link");
     if (hub.link.connected) {
@@ -71,6 +87,7 @@
     try {
       const r = await fetch("/api/status");
       const d = await r.json();
+      lastLog = d.log;
       $("log").innerHTML = d.log.map((e) =>
         `<div><span class="t">${e.t}</span> <span class="${e.kind}">${esc(e.text)}</span></div>`
       ).join("");
@@ -78,17 +95,33 @@
     } catch (e) { /* сервер ещё не поднялся */ }
   }
 
+  // ---------- WebSocket ----------
   function connectWs() {
     const ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws");
     ws.onmessage = (ev) => {
       const d = JSON.parse(ev.data);
+      lastStatus = d;
       renderHeader(d.hub);
       renderHostTemps(d.host_temps);
       renderTherms(d.hub.thermistors);
       renderFans(d.hub.channels);
+      emit();
     };
     ws.onclose = () => setTimeout(connectWs, 2000);
   }
+
+  async function api(path, body) {
+    const r = await fetch(path, body === undefined ? undefined : {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error || ("HTTP " + r.status));
+    return d;
+  }
+
+  window.FanHub = { $, esc, api, onStatus, getStatus: () => lastStatus, getLog: () => lastLog };
 
   connectWs();
   loadLog();

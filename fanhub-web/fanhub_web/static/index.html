@@ -14,31 +14,151 @@
   <div id="watchdog" class="chip ok" style="display:none">FAILSAFE</div>
 </header>
 
-<section id="host-temps">
-  <h2>Температуры ПК <span class="hint">(напрямую: NVML + sysfs, без Prometheus)</span></h2>
-  <div id="temp-cards" class="cards"></div>
-</section>
+<nav id="tabs">
+  <button data-tab="monitor" class="active">Мониторинг</button>
+  <button data-tab="curves">Кривые</button>
+  <button data-tab="binds">Привязки</button>
+  <button data-tab="control">Управление</button>
+  <button data-tab="console">Консоль</button>
+</nav>
 
-<section>
-  <h2>Термисторы платы</h2>
-  <table id="therms"><thead>
-    <tr><th>Имя</th><th>Температура</th><th>Состояние</th></tr>
-  </thead><tbody></tbody></table>
-</section>
+<main>
+<div id="tab-monitor" class="tab-pane active">
+  <section id="host-temps">
+    <h2>Температуры ПК <span class="hint">(напрямую: NVML + sysfs, без Prometheus)</span></h2>
+    <div id="temp-cards" class="cards"></div>
+  </section>
 
-<section>
-  <h2>Вентиляторы</h2>
-  <table id="fans"><thead>
-    <tr><th>Канал</th><th>Выход</th><th>Датчик</th><th>Тахо</th><th>RPM</th><th>Автозапуск</th></tr>
-  </thead><tbody></tbody></table>
-  <p class="hint">Редакторы кривых, привязок, ручной режим и консоль — следующие итерации.</p>
-</section>
+  <section>
+    <h2>Термисторы платы</h2>
+    <table id="therms"><thead>
+      <tr><th>Имя</th><th>Температура</th><th>Состояние</th></tr>
+    </thead><tbody></tbody></table>
+  </section>
 
-<section>
-  <h2>Журнал</h2>
-  <div id="log"></div>
-</section>
+  <section>
+    <h2>Вентиляторы</h2>
+    <table id="fans"><thead>
+      <tr><th>Канал</th><th>Выход</th><th>Датчик</th><th>Тахо</th><th>RPM</th><th>Автозапуск</th></tr>
+    </thead><tbody></tbody></table>
+  </section>
+
+  <section>
+    <h2>Журнал</h2>
+    <div id="log"></div>
+  </section>
+</div>
+
+<div id="tab-curves" class="tab-pane">
+  <section>
+    <h2>Кривые <span class="hint">(5 точек, перетаскивайте; сохранение с проверкой чтением)</span></h2>
+    <div class="toolbar">
+      <label>Канал: <select id="curve-channel"></select></label>
+      <button id="curve-reload" class="btn">Обновить из платы</button>
+      <button id="curve-save" class="btn primary">Сохранить в плату</button>
+      <span id="curve-status" class="hint"></span>
+    </div>
+    <svg id="curve-svg" viewBox="0 0 640 360" width="100%" style="max-width:760px"></svg>
+    <div id="curve-points" class="curve-points"></div>
+  </section>
+</div>
+
+<div id="tab-binds" class="tab-pane">
+  <section>
+    <h2>Режим контроллера</h2>
+    <div class="toolbar">
+      <label><input type="radio" name="mode" value="0"> TMP-SRL — температуры от ПК</label>
+      <label><input type="radio" name="mode" value="1"> TMP-MAN — ручной/автономный</label>
+      <button id="mode-apply" class="btn primary">Применить</button>
+      <span id="mode-status" class="hint"></span>
+    </div>
+    <p class="hint">Привязки меняются только в TMP-MAN: переключитесь, измените, вернитесь.</p>
+  </section>
+  <section>
+    <h2>Привязки каналов к датчикам</h2>
+    <table id="binds"><thead>
+      <tr><th>Канал</th><th>Источник</th><th></th><th></th></tr>
+    </thead><tbody></tbody></table>
+    <p class="hint">После изменения строки нажмите «Сохранить» в её строке — запись сразу уходит в EEPROM платы.</p>
+  </section>
+</div>
+
+<div id="tab-control" class="tab-pane">
+  <section>
+    <h2>Ручной удерж (HOLD)</h2>
+    <div class="toolbar">
+      <label>Канал: <select id="hold-channel"></select></label>
+      <label>Мощность: <input type="range" id="hold-pct" min="0" max="100" value="50">
+        <span id="hold-pct-val">50%</span></label>
+      <label>Секунд: <input type="number" id="hold-sec" min="1" max="65535" value="300" style="width:80px"></label>
+      <button id="hold-apply" class="btn primary">Удержать</button>
+      <button id="hold-release-all" class="btn">Снять все</button>
+    </div>
+    <div class="toolbar">
+      <button id="hold-refresh" class="btn">Активные удержания</button>
+      <span id="hold-status" class="hint"></span>
+    </div>
+  </section>
+
+  <section>
+    <h2>Тахометры</h2>
+    <div class="toolbar">
+      <button id="tachtest" class="btn">Тест тахо (плата)</button>
+      <label>Канал: <select id="tach-channel"></select></label>
+      <button id="tachfast" class="btn">Снять осциллограмму (TACHFAST)</button>
+      <span id="tach-status" class="hint"></span>
+    </div>
+    <svg id="tach-svg" viewBox="0 0 1000 240" width="100%" style="max-width:900px; display:none"></svg>
+    <div id="tach-legend" class="hint" style="display:none">
+      <span style="color:var(--accent)">■</span> спады (обороты) —
+      <span style="color:var(--ok)">■</span> высокий уровень, мкс · окно 50 мс, бин 50 мкс
+    </div>
+  </section>
+
+  <section>
+    <h2>Автозапуск DC (SPIN) и частота PWM (DCFREQ)</h2>
+    <div class="toolbar">
+      <button id="spin-read" class="btn">Прочитать SPIN?</button>
+      <span class="hint">boost 0–50 · step 1–50 · ramp 200–10000 мс · probe 0–3600 с · tries 1–9</span>
+    </div>
+    <div class="toolbar spin-params">
+      <label>boost <input type="number" id="spin-boost" min="0" max="50" style="width:64px"></label>
+      <label>step <input type="number" id="spin-step" min="1" max="50" style="width:64px"></label>
+      <label>ramp, мс <input type="number" id="spin-ramp" min="200" max="10000" step="100" style="width:80px"></label>
+      <label>probe, с <input type="number" id="spin-probe" min="0" max="3600" style="width:64px"></label>
+      <label>tries <input type="number" id="spin-tries" min="1" max="9" style="width:56px"></label>
+      <button id="spin-save" class="btn primary">SPIN=PARAM + SAVE</button>
+      <span id="spin-status" class="hint"></span>
+    </div>
+    <div class="toolbar">
+      <label>Частота DC-канала:
+        <select id="dc-channel"></select>
+        <input type="number" id="dc-hz" min="1" max="40000" style="width:90px"> Гц
+      </label>
+      <button id="dc-apply" class="btn">Применить + SAVE</button>
+      <button id="dc-read" class="btn">DCFREQ?</button>
+    </div>
+    <pre id="spin-dc-out" class="mono-out"></pre>
+  </section>
+</div>
+
+<div id="tab-console" class="tab-pane">
+  <section>
+    <h2>Консоль платы</h2>
+    <pre id="console-out" class="mono-out tall"></pre>
+    <div class="toolbar">
+      <input type="text" id="console-in" placeholder="команда, напр. STATUS?" style="flex:1">
+      <button id="console-send" class="btn primary">Отправить</button>
+    </div>
+    <div class="toolbar" id="console-quick"></div>
+  </section>
+</div>
+</main>
 
 <script src="app.js"></script>
+<script src="curves.js"></script>
+<script src="binds.js"></script>
+<script src="control.js"></script>
+<script src="console.js"></script>
 </body>
 </html>

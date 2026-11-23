@@ -23,9 +23,23 @@ header {
 .chip.bad  { background: #3a1518; color: var(--bad);  border-color: #5c2025; }
 #watchdog { margin-left: auto; font-weight: 600; }
 
+nav#tabs {
+  display: flex; gap: 4px; padding: 8px 20px 0; background: var(--panel);
+  border-bottom: 1px solid var(--border); position: sticky; top: 49px;
+}
+nav#tabs button {
+  background: none; border: none; color: var(--dim); cursor: pointer;
+  padding: 8px 16px; font: inherit; border-bottom: 2px solid transparent;
+}
+nav#tabs button.active { color: var(--text); border-bottom-color: var(--accent); }
+nav#tabs button:hover { color: var(--text); }
+
+.tab-pane { display: none; }
+.tab-pane.active { display: block; }
+
 section { padding: 16px 20px; max-width: 1100px; }
 h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .06em; color: var(--dim); margin: 0 0 10px; }
-.hint { font-size: 12px; text-transform: none; letter-spacing: 0; font-weight: 400; }
+.hint { font-size: 12px; text-transform: none; letter-spacing: 0; font-weight: 400; color: var(--dim); }
 
 .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
 .card {
@@ -46,7 +60,6 @@ td.rpm, td.out { font-weight: 600; }
 .state-OK { color: var(--ok); }
 .state-STALL, .state-ERR, .state-FAULT, .state-TRIPPED { color: var(--bad); }
 .state-ABSENT, .state-NOSIG, .state-OFF { color: var(--warn); }
-.hidden-row { display: none; }
 
 #log {
   background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
@@ -56,3 +69,39 @@ td.rpm, td.out { font-weight: 600; }
 #log .t { color: var(--dim); }
 #log .event { color: var(--accent); }
 #log .sys { color: var(--warn); }
+
+.toolbar {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  margin: 10px 0;
+}
+.btn {
+  background: #232c37; color: var(--text); border: 1px solid var(--border);
+  border-radius: 8px; padding: 6px 14px; font: inherit; cursor: pointer;
+}
+.btn:hover { border-color: var(--accent); }
+.btn:disabled { opacity: 0.45; cursor: default; }
+.btn:disabled:hover { border-color: var(--border); }
+.btn.primary { background: #173a5c; border-color: #2a5a8c; }
+.btn.primary:hover { border-color: var(--accent); }
+.btn.small { padding: 3px 10px; font-size: 12px; }
+
+select, input[type="number"], input[type="text"] {
+  background: #10151b; color: var(--text); border: 1px solid var(--border);
+  border-radius: 6px; padding: 5px 8px; font: inherit;
+}
+input[type="range"] { accent-color: var(--accent); vertical-align: middle; }
+
+.axis { fill: var(--dim); font-size: 11px; font-family: "Segoe UI", system-ui, sans-serif; }
+.pt-handle { transition: fill 0.1s; }
+.curve-points { margin-top: 8px; display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--dim); }
+.curve-points input { margin: 0 2px; }
+
+.mono-out {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+  padding: 10px 14px; min-height: 80px; max-height: 260px; overflow-y: auto;
+  font: 12px/1.6 Consolas, monospace; white-space: pre-wrap; margin: 8px 0;
+}
+.mono-out.tall { height: 320px; max-height: none; }
+.console-cmd { color: var(--accent); }
+
+.spin-params input { width: 70px; }
