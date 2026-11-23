@@ -115,6 +115,20 @@ def create_app(config) -> FastAPI:
         config.save()
         return {"ok": True, "disabled": disabled}
 
+    @app.post("/api/channel-name")
+    async def channel_name(body: dict):
+        ch = str(body.get("channel", "")).strip()
+        label = str(body.get("label", "")).strip()[:40]
+        if not _TOKEN_RE.match(ch):
+            return bad("некорректное имя канала")
+        names = config.data.setdefault("channel_display_names", {})
+        if label and label != ch:
+            names[ch] = label
+        else:
+            names.pop(ch, None)
+        config.save()
+        return {"ok": True, "names": names}
+
     # ---------- диалоги ----------
 
     @app.get("/api/curves")

@@ -110,6 +110,8 @@ input[type="range"] { accent-color: var(--accent); vertical-align: middle; }
 .disabled-row td { opacity: 0.38; }
 td.chk { text-align: center; }
 .bind-cell { cursor: pointer; }
+.ch-name { cursor: pointer; border-bottom: 1px dashed transparent; }
+.ch-name:hover { border-bottom-color: var(--accent); color: var(--accent); }
 .bind-cell:hover .bind-text { color: var(--accent); }
 .cell-error { animation: cellflash 0.5s 3; }
 @keyframes cellflash { 50% { background: #5c2025; } }

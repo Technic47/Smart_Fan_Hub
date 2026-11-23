@@ -1,5 +1,6 @@
 /* MKS Fan Hub — главная страница: вкладки, WebSocket, таблица каналов
-   с чекбоксом «Подключён», кликабельной привязкой и иконками кривых. */
+   с чекбоксом «Подключён», кликабельной привязкой, иконками кривых,
+   фильтром неактивных и переименованием каналов. */
 (function () {
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -7,8 +8,11 @@
   const listeners = [];
   let lastStatus = null;
   let disabledChannels = [];
-  let curvesCache = {};        // имя канала -> [[t,p] x5]
-  let curvesStamp = 0;         // для отложенного обновления спарклайнов
+  let curvesCache = {};
+  let curvesStamp = 0;
+  let bindEditCh = null;      // канал, у которого открыт список привязки
+  let nameEditCh = null;      // канал, у которого открыто переименование
+  let hideOff = localStorage.getItem("fanhub.hideOff") === "1";
 
   function onStatus(fn) { listeners.push(fn); }
   function emit() { for (const fn of listeners) fn(lastStatus); }
@@ -116,15 +120,17 @@
   }
 
   function renderFans(channels) {
+    if (bindEditCh || nameEditCh) return;   // не рвём открытое редактирование
+    const visible = hideOff ? channels.filter((c) => !disabledChannels.includes(c.name)) : channels;
     const tb = document.querySelector("#fans tbody");
-    tb.innerHTML = channels.map((c) => {
+    tb.innerHTML = visible.map((c) => {
       const off = disabledChannels.includes(c.name);
       const spin = c.spin_state
         ? `<span class="state-${esc(c.spin_state)}">${esc(c.spin_state)}${c.spin_state === "ERR" ? " (" + c.spin_tries + ")" : ""}</span>`
         : "";
       const flags = [c.locked ? "закреплён" : "", c.active ? "" : "не активен"].filter(Boolean).join(", ");
       return `<tr data-ch="${c.name}" class="${off ? "disabled-row" : ""}">
-        <td>${esc(c.label)}${flags ? ` <span class="hint">(${flags})</span>` : ""}</td>
+        <td><span class="ch-name" title="Нажми, чтобы переименовать">${esc(c.label)}</span>${flags ? ` <span class="hint">(${flags})</span>` : ""}</td>
         <td class="out">${c.pct}%</td>
         <td class="state-${esc(c.tach_state)}">${esc(c.tach_state)}</td>
         <td class="rpm">${c.rpm}</td>
@@ -142,11 +148,45 @@
         try {
           const d = await api("/api/channel", { channel: tr.dataset.ch, enabled: cb.checked });
           disabledChannels = d.disabled;
-          tr.classList.toggle("disabled-row", !cb.checked);
+          if (hideOff && !cb.checked) renderFans(lastStatus.hub.channels);
+          else tr.classList.toggle("disabled-row", !cb.checked);
         } catch (e) {
           cb.checked = !cb.checked;
           alert("Не сохранилось: " + e.message);
         }
+      });
+    });
+
+    // переименование канала
+    tb.querySelectorAll(".ch-name").forEach((span) => {
+      span.addEventListener("click", () => {
+        const tr = span.closest("tr");
+        const name = tr.dataset.ch;
+        const old = span.textContent;
+        nameEditCh = name;
+        const td = span.parentElement;
+        td.innerHTML = `<input type="text" class="name-inp" value="${esc(old)}" maxlength="40" style="width:150px">`;
+        const inp = td.querySelector("input");
+        inp.focus(); inp.select();
+        const finish = async (commit) => {
+          if (nameEditCh !== name) return;
+          const label = inp.value.trim();
+          nameEditCh = null;
+          if (commit && label && label !== old) {
+            try {
+              await api("/api/channel-name", { channel: name, label });
+            } catch (e) {
+              alert("Не сохранилось: " + e.message);
+            }
+          }
+          renderFans(lastStatus ? lastStatus.hub.channels : []);
+        };
+        inp.addEventListener("keydown", (e) => {
+          if (e.key === "Enter") finish(true);
+          else if (e.key === "Escape") finish(false);
+          e.stopPropagation();
+        });
+        inp.addEventListener("blur", () => finish(true));
       });
     });
 
@@ -157,23 +197,19 @@
         const tr = cell.closest("tr");
         const name = tr.dataset.ch;
         const c = channels.find((x) => x.name === name);
+        if (!c) return;
         const old = bindLabel(c);
+        bindEditCh = name;
         cell.innerHTML = `<select>${sourceOptions(c.source_type, c.source_name)}</select>`;
         const selEl = cell.querySelector("select");
-        selEl.focus();
-        const cancel = () => { cell.innerHTML = `<span class="bind-text">${esc(old)}</span>`; };
-        selEl.addEventListener("blur", cancel);
+        let committed = false;
         selEl.addEventListener("change", async () => {
-          selEl.removeEventListener("blur", cancel);
+          committed = true;
           const [type, source] = selEl.value.split(":");
-          cell.innerHTML = `<span class="bind-text">${esc(old)}</span>`;
           try {
             const r = await api("/api/bind", { channel: name, type, source });
             if (!r.ok) {
-              cell.classList.add("cell-error");
-              setTimeout(() => cell.classList.remove("cell-error"), 1500);
               alert("Плата отказала: " + r.lines.join("; ") + "\n(для закреплённых каналов переключи режим в TMP-MAN)");
-              return;
             }
             await refreshCurves();          // кривая заменена на кривую новой группы
             if (window.CurveEditor && window.CurveEditor.isOpenFor(name)) {
@@ -182,7 +218,18 @@
           } catch (e) {
             alert("Ошибка: " + e.message);
           }
+          bindEditCh = null;
+          renderFans(lastStatus ? lastStatus.hub.channels : []);
         });
+        selEl.addEventListener("blur", () => {
+          setTimeout(() => {
+            if (!committed) {
+              bindEditCh = null;
+              renderFans(lastStatus ? lastStatus.hub.channels : []);
+            }
+          }, 150);
+        });
+        selEl.focus();
       });
     });
 
@@ -219,6 +266,15 @@
     };
     ws.onclose = () => setTimeout(connectWs, 2000);
   }
+
+  // чекбокс «Скрыть неактивные»
+  const hideOffEl = $("hide-off");
+  hideOffEl.checked = hideOff;
+  hideOffEl.addEventListener("change", () => {
+    hideOff = hideOffEl.checked;
+    localStorage.setItem("fanhub.hideOff", hideOff ? "1" : "0");
+    renderFans(lastStatus ? lastStatus.hub.channels : []);
+  });
 
   window.FanHub = {
     $, esc, api, onStatus,
