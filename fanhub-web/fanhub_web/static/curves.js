@@ -3,7 +3,7 @@
    редактирует её владелец группы (первый канал по порядку платы),
    у присоединённых каналов редактирование заблокировано. */
 (function () {
-  const { $, api, getStatus, getCurves, refreshCurves } = window.FanHub;
+  const { $, esc, api, getStatus, getCurves, refreshCurves } = window.FanHub;
 
   const NS = "http://www.w3.org/2000/svg";
   const L = 46, R = 14, T = 14, B = 30, W = 640, H = 360;
