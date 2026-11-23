@@ -27,7 +27,12 @@ def create_app(config) -> FastAPI:
         status_ms=config.data["status_ms"],
         exclusive=bool(config.data.get("exclusive", True)),
     )
+    hub.daemon = True
     hub.start()
+
+    @app.on_event("shutdown")
+    def _shutdown() -> None:
+        hub.stop()
 
     display_serial = config.data["serial_display_names"]
     display_channel = config.data["channel_display_names"]

@@ -163,6 +163,8 @@ class HubLink(threading.Thread):
         self.temp_map = temp_map          # serial key -> sensor spec
         self.log = log
         self.port_wanted = port
+        self._fails = 0
+        self._fail_reason = ""
         self.poll_ms = poll_ms
         self.status_ms = status_ms
         self.exclusive = exclusive
@@ -232,11 +234,12 @@ class HubLink(threading.Thread):
         return None
 
     def _probe(self, name: str) -> serial.Serial | None:
-        """Открыть порт без сброса платы, спросить STATUS?."""
+        """Открыть порт, дождаться загрузки платы, спросить STATUS?."""
         try:
             p = serial.Serial(name, BAUD, timeout=0.2, write_timeout=1.0,
                               exclusive=self.exclusive)
-        except (serial.SerialException, OSError):
+        except (serial.SerialException, OSError) as e:
+            self._fail_reason = f"{name}: {e}"
             return None
         try:
             # не ронять DTR при закрытии: иначе при переподключении будет
@@ -245,11 +248,23 @@ class HubLink(threading.Thread):
             attrs = termios.tcgetattr(p.fd)
             attrs[2] &= ~termios.HUPCL
             termios.tcsetattr(p.fd, termios.TCSANOW, attrs)
-            for _attempt in range(3):
+            # реальная плата сбрасывается при открытии порта и ~2 с грузится:
+            # ждём баннер загрузки, и только потом опрашиваем
+            boot_deadline = time.monotonic() + 4.0
+            boot_buf = b""
+            while time.monotonic() < boot_deadline:
+                if self._stop.is_set():
+                    break
+                chunk = p.read(512)
+                if chunk:
+                    boot_buf += chunk
+                    if b"EVENT=BOOT" in boot_buf or b"alive" in boot_buf:
+                        break
+            for _attempt in range(4):
                 if self._stop.is_set():
                     break
                 p.reset_input_buffer()
-                p.write(b"STATUS?\n")
+                p.write(b"STATUS?" + bytes([10]))
                 deadline = time.monotonic() + 1.2
                 buf = b""
                 while time.monotonic() < deadline:
@@ -259,8 +274,8 @@ class HubLink(threading.Thread):
                         if b"STATUS=" in buf:
                             return p
                 time.sleep(0.2)
-        except (serial.SerialException, OSError, termios.error):
-            pass
+        except (serial.SerialException, OSError, termios.error) as e:
+            self._fail_reason = f"{name}: {e}"
         try:
             p.close()
         except Exception:
@@ -324,8 +339,14 @@ class HubLink(threading.Thread):
             port = self._find_board()
             if port is None:
                 self.connected = False
+                self._fails += 1
+                if self._fails % 10 == 1:
+                    reason = self._fail_reason or "нет ответа на STATUS?"
+                    self.log.add("sys", f"Плата не найдена ({reason}), попытка {self._fails}")
                 time.sleep(2.0)
                 continue
+            self._fails = 0
+            self._fail_reason = ""
             self.connected = True
             self.port_name = port.name
             self.last_rx = time.monotonic()
