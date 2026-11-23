@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MKS Fan Hub</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <div class="brand">MKS Fan Hub</div>
+  <div id="link" class="chip bad">нет связи</div>
+  <div id="mode" class="chip">режим: —</div>
+  <div id="watchdog" class="chip ok" style="display:none">FAILSAFE</div>
+</header>
+
+<section id="host-temps">
+  <h2>Температуры ПК <span class="hint">(напрямую: NVML + sysfs, без Prometheus)</span></h2>
+  <div id="temp-cards" class="cards"></div>
+</section>
+
+<section>
+  <h2>Термисторы платы</h2>
+  <table id="therms"><thead>
+    <tr><th>Имя</th><th>Температура</th><th>Состояние</th></tr>
+  </thead><tbody></tbody></table>
+</section>
+
+<section>
+  <h2>Вентиляторы</h2>
+  <table id="fans"><thead>
+    <tr><th>Канал</th><th>Выход</th><th>Датчик</th><th>Тахо</th><th>RPM</th><th>Автозапуск</th></tr>
+  </thead><tbody></tbody></table>
+  <p class="hint">Редакторы кривых, привязок, ручной режим и консоль — следующие итерации.</p>
+</section>
+
+<section>
+  <h2>Журнал</h2>
+  <div id="log"></div>
+</section>
+
+<script src="app.js"></script>
+</body>
+</html>

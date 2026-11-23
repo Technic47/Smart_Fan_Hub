@@ -1,0 +1,18 @@
+[Unit]
+Description=MKS Fan Hub web interface (serial link + temps feeding + UI)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=technic47
+Group=dialout
+WorkingDirectory=/home/technic47/fanhub-web
+Environment=FANHUB_CONFIG=/home/technic47/fanhub-web/config.json
+ExecStart=/home/technic47/fanhub-web/.venv/bin/python -m fanhub_web
+Restart=always
+RestartSec=3
+
+# доступ к USB-serial: пользователь должен быть в группе dialout
+[Install]
+WantedBy=multi-user.target
