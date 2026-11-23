@@ -99,6 +99,8 @@ def create_app(config) -> FastAPI:
             "log": log.tail(150),
             "serial_display_names": display_serial,
             "disabled_channels": config.data.get("disabled_channels", []),
+            "disabled_thermistors": config.data.get("disabled_thermistors", []),
+            "curve_groups": config.data.get("curve_groups", {}),
         }
 
     @app.post("/api/channel")
@@ -129,6 +131,84 @@ def create_app(config) -> FastAPI:
         config.save()
         return {"ok": True, "names": names}
 
+    @app.post("/api/therm")
+    async def therm_set(body: dict):
+        name = str(body.get("therm", "")).strip()
+        if not _TOKEN_RE.match(name):
+            return bad("некорректное имя термистора")
+        disabled = config.data.setdefault("disabled_thermistors", [])
+        if body.get("enabled"):
+            if name in disabled:
+                disabled.remove(name)
+        elif name not in disabled:
+            disabled.append(name)
+        config.save()
+        return {"ok": True, "disabled": disabled}
+
+    # ---------- группы кривых ----------
+
+    def _group_members(groups: dict, gid: str) -> list[str]:
+        return [ch for ch, g in groups.items() if g == gid]
+
+    def _new_group_id(groups: dict) -> str:
+        used = set(groups.values())
+        for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
+            if c not in used:
+                return c
+        i = 1
+        while f"G{i}" in used:
+            i += 1
+        return f"G{i}"
+
+    def _group_primary(groups: dict, gid: str) -> str | None:
+        """Первый член группы в порядке каналов платы (владелец кривой)."""
+        order = [c["name"] for c in hub.snapshot()["channels"]]
+        mem = _group_members(groups, gid)
+        mem.sort(key=lambda c: order.index(c) if c in order else len(order))
+        return mem[0] if mem else None
+
+    @app.post("/api/curve-group")
+    async def curve_group(body: dict):
+        ch = str(body.get("channel", "")).strip()
+        with_ch = str(body.get("with", "")).strip()
+        if not _TOKEN_RE.match(ch) or (with_ch and not _TOKEN_RE.match(with_ch)):
+            return bad("некорректное имя канала")
+        snap_names = [c["name"] for c in hub.snapshot()["channels"]]
+        if ch not in snap_names or (with_ch and with_ch not in snap_names):
+            return bad("канал не найден на плате")
+        groups = config.data.setdefault("curve_groups", {})
+        if with_ch == "":
+            # отделить канал от группы; группа из одного распадается
+            gid = groups.pop(ch, None)
+            if gid and len(_group_members(groups, gid)) <= 1:
+                for c in _group_members(groups, gid):
+                    groups.pop(c, None)
+            config.save()
+            return {"ok": True, "groups": groups}
+        # объединить: обе группы (если есть) сливаются в одну
+        g1, g2 = groups.get(ch), groups.get(with_ch)
+        gid = g1 or g2 or _new_group_id(groups)
+        for g in {x for x in (g1, g2) if x}:
+            for c in _group_members(groups, g):
+                groups[c] = gid
+        groups[ch] = gid
+        groups[with_ch] = gid
+        # все члены группы (кроме владельца) принимают его кривую
+        primary = _group_primary(groups, gid)
+        if primary:
+            pts = _curves_from(await req("CURVES?")).get(primary)
+            if pts:
+                for member in _group_members(groups, gid):
+                    if member == primary:
+                        continue
+                    for i, (t, p) in enumerate(pts):
+                        for ln in await req(f"CURVE={member},{i},{int(round(t))},{int(p)}"):
+                            if "ERR" in ln:
+                                return bad("кривая группы не записалась: " + ln)
+                await req("CURVE=SAVE")
+        config.save()
+        return {"ok": True, "groups": groups, "primary": primary}
+
     # ---------- диалоги ----------
 
     @app.get("/api/curves")
@@ -153,16 +233,16 @@ def create_app(config) -> FastAPI:
             if not (0 <= t <= 125 and 0 <= p <= 100):
                 return bad("точка вне диапазона (t: 0..125, %: 0..100)")
             norm.append((int(round(t)), p))
-        # группа кривой = текущая привязка канала: пишем одну кривую
-        # во все каналы группы (как «группы кривых» в трее)
-        snap_chans = hub.snapshot()["channels"]
-        members = [ch]
-        me = next((c for c in snap_chans if c["name"] == ch), None)
-        if me is not None:
-            members += [c["name"] for c in snap_chans
-                        if c["name"] != ch
-                        and c["source_type"] == me["source_type"]
-                        and c["source_name"] == me["source_name"]]
+        # группа кривой = группа группировки (curve_groups); у неё криваю
+        # пишем всем членам, у одиночного канала — только ему
+        groups = config.data.get("curve_groups", {})
+        gid = groups.get(ch)
+        if gid:
+            members = _group_members(groups, gid)
+            order = [c["name"] for c in hub.snapshot()["channels"]]
+            members.sort(key=lambda c: order.index(c) if c in order else len(order))
+        else:
+            members = [ch]
         for member in members:
             for i, (t, p) in enumerate(norm):
                 for ln in await req(f"CURVE={member},{i},{t},{p}"):
@@ -197,19 +277,6 @@ def create_app(config) -> FastAPI:
         src = str(body.get("source", "")).strip()
         if not (_TOKEN_RE.match(ch) and typ in ("THERM", "SERIAL") and _TOKEN_RE.match(src)):
             return bad("некорректные аргументы")
-        # кривая новой группы: донор — любой канал, уже привязанный к этому
-        # источнику; его кривая копируется на перепривязываемый канал
-        donor = next((c["name"] for c in hub.snapshot()["channels"]
-                      if c["name"] != ch
-                      and c["source_type"] == typ
-                      and c["source_name"] == src), None)
-        if donor:
-            pts = _curves_from(await req("CURVES?")).get(donor)
-            if pts:
-                for i, (t, p) in enumerate(pts):
-                    for ln in await req(f"CURVE={ch},{i},{int(round(t))},{int(p)}"):
-                        if "ERR" in ln:
-                            return bad("кривая новой группы не записалась: " + ln)
         lines = await req(f"BIND={ch},{typ},{src}")
         rejected = [ln for ln in lines if "ERR" in ln or "LOCKED" in ln]
         if rejected:
@@ -253,6 +320,7 @@ def create_app(config) -> FastAPI:
                     await websocket.send_json({
                         "hub": snap,
                         "host_temps": host_temps(),
+                        "curve_groups": config.data.get("curve_groups", {}),
                     })
                 await asyncio.sleep(0.5)
         except WebSocketDisconnect:

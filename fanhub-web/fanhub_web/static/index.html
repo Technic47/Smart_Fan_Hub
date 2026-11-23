@@ -37,14 +37,17 @@
     </thead><tbody></tbody></table>
     <p class="hint">«Привязка»: нажми на значение, чтобы перепривязать канал к другому датчику
     (прошивка просит режим TMP-MAN для закреплённых каналов).
-    Иконка графика — редактор кривой; кривая общая для всех каналов с тем же датчиком,
-    при перепривязке кривая канала заменяется кривой новой группы.</p>
+    Иконка графика — редактор кривой. Кривые можно группировать: одна кривая на
+    несколько выводов, редактирует её владелец группы (пометка «гр. X»).</p>
   </section>
 
   <section>
     <h2>Термисторы платы</h2>
+    <div class="toolbar">
+      <label><input type="checkbox" id="hide-therm-off"> Скрыть неподключённые</label>
+    </div>
     <table id="therms"><thead>
-      <tr><th>Имя</th><th>Температура</th><th>Состояние</th></tr>
+      <tr><th>Имя</th><th>Температура</th><th>Состояние</th><th>Подключён</th></tr>
     </thead><tbody></tbody></table>
   </section>
 
@@ -130,7 +133,8 @@
   <div class="modal-box">
     <div class="toolbar">
       <strong id="cm-title">Кривая</strong>
-      <label>Привязка: <select id="cm-bind"></select></label>
+      <label>Группировка: <select id="cm-group"></select></label>
+      <span class="hint">общая кривая на несколько выводов; редактирует владелец</span>
       <span id="cm-status" class="hint"></span>
       <button id="cm-close" class="btn" style="margin-left:auto">Закрыть</button>
     </div>

@@ -1,6 +1,7 @@
-/* Модальное окно редактирования кривой канала.
-   Кривая общая для группы (каналы с тем же датчиком); смена привязки
-   в окне заменяет кривую на кривую новой группы. */
+/* Модальное окно кривой канала.
+   Группировка: канал можно присоединить к другому — кривая становится общей,
+   редактирует её владелец группы (первый канал по порядку платы),
+   у присоединённых каналов редактирование заблокировано. */
 (function () {
   const { $, api, getStatus, getCurves, refreshCurves } = window.FanHub;
 
@@ -13,7 +14,6 @@
   let points = [];
   let channel = "";
   let dragIdx = -1;
-  let opening = false;
 
   const svg = $("cm-svg");
   const statusEl = $("cm-status");
@@ -32,10 +32,40 @@
 
   function sorted() { points = points.slice().sort((a, b) => a[0] - b[0]); }
 
-  function renderPointsList() {
+  function groups() {
+    const st = getStatus();
+    return (st && st.curve_groups) || {};
+  }
+
+  function boardOrder() {
+    const st = getStatus();
+    return st ? st.hub.channels.map((c) => c.name) : [];
+  }
+
+  function groupInfo(name) {
+    const g = groups()[name];
+    if (!g) return null;
+    const order = boardOrder();
+    const mem = Object.keys(groups()).filter((c) => groups()[c] === g);
+    mem.sort((a, b) => order.indexOf(a) - order.indexOf(b));
+    return { gid: g, members: mem, primary: mem[0] || null };
+  }
+
+  function channelLabel(name) {
+    const st = getStatus();
+    const c = st && st.hub.channels.find((ch) => ch.name === name);
+    return c ? c.label : name;
+  }
+
+  function isLocked(name) {
+    const gi = groupInfo(name);
+    return gi !== null && gi.primary !== name;
+  }
+
+  function renderPointsList(editable) {
     $("cm-points").innerHTML = points.map((pt, i) =>
-      `<span class="pt">точка ${i + 1}: <input type="number" min="0" max="125" value="${pt[0]}" data-i="${i}" data-k="0" style="width:58px">°C` +
-      ` <input type="number" min="0" max="100" value="${pt[1]}" data-i="${i}" data-k="1" style="width:52px">%</span>`
+      `<span class="pt">точка ${i + 1}: <input type="number" min="0" max="125" value="${pt[0]}" data-i="${i}" data-k="0" style="width:58px" ${editable ? "" : "disabled"}>°C` +
+      ` <input type="number" min="0" max="100" value="${pt[1]}" data-i="${i}" data-k="1" style="width:52px" ${editable ? "" : "disabled"}>%</span>`
     ).join(" ");
     document.querySelectorAll("#cm-points input").forEach((inp) => {
       inp.addEventListener("change", () => {
@@ -78,6 +108,7 @@
   }
 
   function draw() {
+    const editable = !isLocked(channel);
     svg.innerHTML = "";
     for (let t = 0; t <= T_MAX; t += 10) {
       el("line", { x1: x(t), y1: T, x2: x(t), y2: T + PH, stroke: t % 50 ? "#20262e" : "#2c3540", "stroke-width": 1 });
@@ -101,41 +132,62 @@
         el("circle", { cx: x(lm.temp), cy: y(lm.pct), r: 5, fill: "none", stroke: "#4aa3ff", "stroke-width": 2 });
       }
       const d = points.map((pt, i) => (i ? "L" : "M") + x(pt[0]).toFixed(1) + " " + y(pt[1]).toFixed(1)).join(" ");
-      el("path", { d, fill: "none", stroke: "#4aa3ff", "stroke-width": 2 });
+      el("path", { d, fill: "none", stroke: editable ? "#4aa3ff" : "#5a6778", "stroke-width": 2 });
       points.forEach((pt, i) => {
         const c = el("circle", {
           cx: x(pt[0]), cy: y(pt[1]), r: 9, class: "pt-handle",
-          fill: dragIdx === i ? "#e2b93d" : "#4aa3ff", stroke: "#0d1117", "stroke-width": 2,
-          style: "cursor:grab",
+          fill: dragIdx === i ? "#e2b93d" : (editable ? "#4aa3ff" : "#5a6778"),
+          stroke: "#0d1117", "stroke-width": 2,
+          style: editable ? "cursor:grab" : "cursor:not-allowed",
         });
-        c.addEventListener("pointerdown", (ev) => { dragIdx = i; c.setPointerCapture(ev.pointerId); ev.preventDefault(); });
-        c.addEventListener("pointermove", (ev) => {
-          if (dragIdx !== i) return;
-          const rect = svg.getBoundingClientRect();
-          const sx = (ev.clientX - rect.left) * (W / rect.width);
-          const sy = (ev.clientY - rect.top) * (H / rect.height);
-          points[i][0] = Math.min(125, Math.max(0, Math.round(invX(sx))));
-          points[i][1] = Math.min(100, Math.max(0, Math.round(invY(sy))));
-          draw();
-        });
-        c.addEventListener("pointerup", () => { dragIdx = -1; sorted(); renderPointsList(); draw(); });
+        if (editable) {
+          c.addEventListener("pointerdown", (ev) => { dragIdx = i; c.setPointerCapture(ev.pointerId); ev.preventDefault(); });
+          c.addEventListener("pointermove", (ev) => {
+            if (dragIdx !== i) return;
+            const rect = svg.getBoundingClientRect();
+            const sx = (ev.clientX - rect.left) * (W / rect.width);
+            const sy = (ev.clientY - rect.top) * (H / rect.height);
+            points[i][0] = Math.min(125, Math.max(0, Math.round(invX(sx))));
+            points[i][1] = Math.min(100, Math.max(0, Math.round(invY(sy))));
+            draw();
+          });
+          c.addEventListener("pointerup", () => { dragIdx = -1; sorted(); renderPointsList(true); draw(); });
+        }
         const label = el("text", { x: x(pt[0]), y: y(pt[1]) - 14, "text-anchor": "middle", class: "axis" });
         label.textContent = `${pt[0]}°/${pt[1]}%`;
       });
     }
-    renderPointsList();
+    renderPointsList(editable);
   }
 
-  function fillBindSelect() {
+  function fillGroupSelect() {
     const st = getStatus();
     if (!st) return;
-    const ch = st.hub.channels.find((c) => c.name === channel);
-    if (!ch) return;
+    const gi = groupInfo(channel);
     const opts = [];
-    for (const t of (st.hub.thermistors || [])) opts.push({ v: "THERM:" + t.name, label: "терм. " + t.name });
-    for (const [k, label] of Object.entries(st.serial_display_names || {})) opts.push({ v: "SERIAL:" + k, label: "ПК: " + label });
-    $("cm-bind").innerHTML = opts.map((o) => `<option value="${o.v}">${o.label}</option>`).join("");
-    $("cm-bind").value = ch.source_type + ":" + ch.source_name;
+    if (gi && gi.primary === channel) {
+      opts.push(`<option value="__self__" selected>владелец гр. ${gi.gid}</option>`);
+      opts.push(`<option value="">— отдельно —</option>`);
+    } else {
+      opts.push(`<option value="">— отдельно —</option>`);
+    }
+    for (const c of st.hub.channels) {
+      if (c.name === channel) continue;
+      const sel = gi && gi.primary === c.name ? "selected" : "";
+      opts.push(`<option value="${c.name}" ${sel}>с «${esc(c.label)}»</option>`);
+    }
+    $("cm-group").innerHTML = opts.join("");
+    $("cm-group").value = gi ? (gi.primary === channel ? "__self__" : gi.primary) : "";
+  }
+
+  function lockHint() {
+    const gi = groupInfo(channel);
+    if (gi && gi.primary !== channel) {
+      statusEl.textContent = `кривая общая (гр. ${gi.gid}), редактируется у «${channelLabel(gi.primary)}»`;
+      $("cm-save").disabled = true;
+    } else {
+      $("cm-save").disabled = false;
+    }
   }
 
   async function loadFromBoard() {
@@ -150,6 +202,7 @@
       } else {
         statusEl.textContent = "кривая не найдена";
       }
+      lockHint();
       draw();
     } catch (e) {
       statusEl.textContent = "ошибка: " + e.message;
@@ -157,6 +210,7 @@
   }
 
   async function save() {
+    if (isLocked(channel)) return;
     statusEl.textContent = "сохраняю…";
     try {
       sorted();
@@ -173,12 +227,10 @@
 
   function open(name) {
     channel = name;
-    opening = true;
     const st = getStatus();
     const label = st && st.hub.channels.find((c) => c.name === name);
     $("cm-title").textContent = "Кривая: " + (label ? label.label : name);
-    fillBindSelect();
-    // мгновенно показать кэш, потом свежее с платы
+    fillGroupSelect();
     const cached = getCurves()[name];
     if (cached) {
       points = cached.map((p) => [Math.round(p[0]), p[1]]);
@@ -186,6 +238,7 @@
       draw();
     }
     $("curve-modal").style.display = "";
+    lockHint();
     loadFromBoard();
   }
 
@@ -196,22 +249,21 @@
   $("cm-reload").addEventListener("click", loadFromBoard);
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") close(); });
 
-  $("cm-bind").addEventListener("change", async () => {
-    const [type, source] = $("cm-bind").value.split(":");
-    statusEl.textContent = "перепривязка…";
+  $("cm-group").addEventListener("change", async () => {
+    const withCh = $("cm-group").value;
+    if (withCh === "__self__") return;   // владелец: перегруппировка не нужна
+    statusEl.textContent = withCh ? "группирую…" : "открепляю…";
     try {
-      const r = await api("/api/bind", { channel, type, source });
-      if (!r.ok) {
-        statusEl.textContent = "отказ платы: " + r.lines.join("; ");
-        fillBindSelect();
-        return;
-      }
-      statusEl.textContent = "привязано, кривая заменена на кривую группы";
+      await api("/api/curve-group", { channel, with: withCh });
+      statusEl.textContent = withCh
+        ? "сгруппировано, кривая заменена кривой владельца"
+        : "откреплено, кривая осталась прежней";
       refreshCurves();
+      fillGroupSelect();
       await loadFromBoard();
     } catch (e) {
       statusEl.textContent = "ошибка: " + e.message;
-      fillBindSelect();
+      fillGroupSelect();
     }
   });
 

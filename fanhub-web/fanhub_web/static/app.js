@@ -8,11 +8,13 @@
   const listeners = [];
   let lastStatus = null;
   let disabledChannels = [];
+  let disabledTherms = [];
   let curvesCache = {};
   let curvesStamp = 0;
   let bindEditCh = null;      // канал, у которого открыт список привязки
   let nameEditCh = null;      // канал, у которого открыто переименование
   let hideOff = localStorage.getItem("fanhub.hideOff") === "1";
+  let hideThermOff = localStorage.getItem("fanhub.hideThermOff") === "1";
 
   function onStatus(fn) { listeners.push(fn); }
   function emit() { for (const fn of listeners) fn(lastStatus); }
@@ -106,17 +108,41 @@
   }
 
   function renderTherms(therms) {
-    document.querySelector("#therms tbody").innerHTML = therms.map((t) => {
+    const visible = hideThermOff ? therms.filter((t) => !disabledTherms.includes(t.name)) : therms;
+    document.querySelector("#therms tbody").innerHTML = visible.map((t) => {
+      const off = disabledTherms.includes(t.name);
       const v = t.value === null ? "—" : t.value.toFixed(1) + " °C";
-      return `<tr><td>${esc(t.name)}</td><td>${v}</td>` +
-             `<td class="state-${esc(t.state)}">${esc(t.state)}</td></tr>`;
+      return `<tr data-th="${t.name}" class="${off ? "disabled-row" : ""}">
+        <td>${esc(t.name)}</td><td>${v}</td>
+        <td class="state-${esc(t.state)}">${esc(t.state)}</td>
+        <td class="chk"><input type="checkbox" class="th-conn" ${off ? "" : "checked"} title="Подключён ли термистор"></td>
+      </tr>`;
     }).join("");
+    document.querySelectorAll("#therms input.th-conn").forEach((cb) => {
+      cb.addEventListener("change", async () => {
+        const tr = cb.closest("tr");
+        try {
+          const d = await api("/api/therm", { therm: tr.dataset.th, enabled: cb.checked });
+          disabledTherms = d.disabled;
+          if (hideThermOff && !cb.checked) renderTherms(lastStatus.hub.thermistors);
+          else tr.classList.toggle("disabled-row", !cb.checked);
+        } catch (e) {
+          cb.checked = !cb.checked;
+          alert("Не сохранилось: " + e.message);
+        }
+      });
+    });
   }
 
   function bindLabel(c) {
     if (c.source_type === "THERM") return "терм. " + c.source_name;
     const names = lastStatus ? lastStatus.serial_display_names || {} : {};
     return "ПК: " + (names[c.source_name] || c.source_name);
+  }
+
+  function groupLabel(c) {
+    const g = lastStatus && lastStatus.curve_groups ? lastStatus.curve_groups[c.name] : null;
+    return g ? "гр. " + g : "";
   }
 
   function renderFans(channels) {
@@ -137,7 +163,7 @@
         <td>${spin}</td>
         <td class="chk"><input type="checkbox" class="conn" ${off ? "" : "checked"} title="Подключён ли вентилятор"></td>
         <td class="bind-cell" title="Нажми, чтобы перепривязать"><span class="bind-text">${esc(bindLabel(c))}</span></td>
-        <td class="curve-cell" title="Редактировать кривую">${sparkline(c.name)} <span class="hint group-label">${esc(c.source_name)}</span></td>
+        <td class="curve-cell" title="Редактировать кривую">${sparkline(c.name)} <span class="hint group-label">${esc(groupLabel(c))}</span></td>
       </tr>`;
     }).join("");
 
@@ -246,6 +272,7 @@
       const r = await fetch("/api/status");
       const d = await r.json();
       disabledChannels = d.disabled_channels || [];
+      disabledTherms = d.disabled_thermistors || [];
       $("log").innerHTML = d.log.map((e) =>
         `<div><span class="t">${e.t}</span> <span class="${e.kind}">${esc(e.text)}</span></div>`
       ).join("");
@@ -267,13 +294,22 @@
     ws.onclose = () => setTimeout(connectWs, 2000);
   }
 
-  // чекбокс «Скрыть неактивные»
+  // чекбокс «Скрыть неактивные» (каналы)
   const hideOffEl = $("hide-off");
   hideOffEl.checked = hideOff;
   hideOffEl.addEventListener("change", () => {
     hideOff = hideOffEl.checked;
     localStorage.setItem("fanhub.hideOff", hideOff ? "1" : "0");
     renderFans(lastStatus ? lastStatus.hub.channels : []);
+  });
+
+  // чекбокс «Скрыть неподключённые» (термисторы)
+  const hideThermOffEl = $("hide-therm-off");
+  hideThermOffEl.checked = hideThermOff;
+  hideThermOffEl.addEventListener("change", () => {
+    hideThermOff = hideThermOffEl.checked;
+    localStorage.setItem("fanhub.hideThermOff", hideThermOff ? "1" : "0");
+    renderTherms(lastStatus ? lastStatus.hub.thermistors : []);
   });
 
   window.FanHub = {
